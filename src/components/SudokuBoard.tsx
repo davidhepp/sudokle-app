@@ -3,6 +3,12 @@ import { fetchPuzzle } from "@/lib/api";
 import { useState, useEffect, useCallback } from "react";
 import { SkeletonBoard } from "./SkeletonBoard";
 import { Eraser, Undo2 } from "lucide-react";
+import {
+  saveProgress,
+  loadProgress,
+  getTodaysDate,
+  type SudokuProgress,
+} from "@/lib/storage";
 interface PuzzleData {
   id: string;
   board: string;
@@ -33,7 +39,22 @@ export default function SudokuBoard() {
         setLoading(true);
         const puzzleData = await fetchPuzzle();
         setPuzzle(puzzleData);
-        setUserBoard(puzzleData.board); // Initialize user board with puzzle data
+
+        // Try to load saved progress for today
+        const savedProgress = loadProgress();
+
+        if (savedProgress && savedProgress.puzzleId === puzzleData.id) {
+          // Restore saved progress
+          setUserBoard(savedProgress.userBoard);
+          setBoardHistory(savedProgress.boardHistory);
+          setSolutionResult(savedProgress.solutionResult || null);
+        } else {
+          // Initialize with fresh puzzle data
+          setUserBoard(puzzleData.board);
+          setBoardHistory([]);
+          setSolutionResult(null);
+        }
+
         setError(null);
       } catch (err) {
         setError("Failed to load today's puzzle");
@@ -48,8 +69,24 @@ export default function SudokuBoard() {
 
   // Check if board is complete (no empty cells)
   const isBoardComplete = useCallback(() => {
-    return userBoard && !userBoard.includes("0");
+    return Boolean(userBoard && !userBoard.includes("0"));
   }, [userBoard]);
+
+  // Save progress to localStorage
+  const saveCurrentProgress = useCallback(() => {
+    if (!puzzle) return;
+
+    const progress: SudokuProgress = {
+      puzzleId: puzzle.id,
+      userBoard,
+      boardHistory,
+      date: getTodaysDate(),
+      isCompleted: isBoardComplete(),
+      solutionResult,
+    };
+
+    saveProgress(progress);
+  }, [puzzle, userBoard, boardHistory, isBoardComplete, solutionResult]);
 
   // Submit solution for validation
   const checkSolution = useCallback(async () => {
@@ -85,6 +122,20 @@ export default function SudokuBoard() {
       checkSolution();
     }
   }, [isBoardComplete, isChecking, solutionResult, checkSolution]);
+
+  // Save progress whenever userBoard or boardHistory changes
+  useEffect(() => {
+    if (puzzle && userBoard) {
+      saveCurrentProgress();
+    }
+  }, [userBoard, boardHistory, saveCurrentProgress, puzzle]);
+
+  // Save progress when solution result changes
+  useEffect(() => {
+    if (puzzle && solutionResult) {
+      saveCurrentProgress();
+    }
+  }, [solutionResult, saveCurrentProgress, puzzle]);
 
   // Handle number input
   const handleNumberInput = useCallback(
@@ -307,7 +358,7 @@ export default function SudokuBoard() {
                 selectedIndex === null ||
                 (puzzle && originalCells[selectedIndex] !== "0")
               }
-              className="w-10 h-10 text-2xl text-blue-500 hover:text-blue-600 disabled:text-gray-300 disabled:cursor-not-allowed font-semibold rounded transition-colors"
+              className="w-10 h-10 text-2xl text-blue-500 hover:text-blue-600 disabled:text-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors"
             >
               {num}
             </button>
@@ -318,14 +369,14 @@ export default function SudokuBoard() {
               selectedIndex === null ||
               (puzzle && originalCells[selectedIndex] !== "0")
             }
-            className="w-10 h-10 text-2xl text-red-500 hover:text-red-600 disabled:text-gray-300 disabled:cursor-not-allowed font-semibold rounded transition-colors flex items-center justify-center"
+            className="w-10 h-10 text-2xl text-red-500 hover:text-red-600 disabled:text-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors flex items-center justify-center"
           >
             <Eraser className="w-6 h-6" />
           </button>
           <button
             onClick={() => undoLastInput()}
             disabled={boardHistory.length === 0}
-            className="w-10 h-10 text-2xl text-blue-500 hover:text-blue-600 disabled:text-gray-300 disabled:cursor-not-allowed font-semibold rounded transition-colors flex items-center justify-center"
+            className="w-10 h-10 text-2xl text-blue-500 hover:text-blue-600 disabled:text-gray-300 disabled:cursor-not-allowed cursor-pointer transition-colors flex items-center justify-center"
           >
             <Undo2 className="w-6 h-6" />
           </button>
