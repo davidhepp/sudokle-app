@@ -93,7 +93,100 @@ class SudokuGenerator {
     return this.grid.map((row) => [...row]);
   }
 
-  // Remove cells based on difficulty level
+  // Create a copy of any grid
+  private copyAnyGrid(grid: number[][]): number[][] {
+    return grid.map((row) => [...row]);
+  }
+
+  // Check if a number is valid at a given position for any grid
+  private isValidForGrid(
+    grid: number[][],
+    row: number,
+    col: number,
+    num: number
+  ): boolean {
+    // Check row
+    for (let x = 0; x < 9; x++) {
+      if (grid[row][x] === num) return false;
+    }
+
+    // Check column
+    for (let x = 0; x < 9; x++) {
+      if (grid[x][col] === num) return false;
+    }
+
+    // Check 3x3 box
+    const startRow = row - (row % 3);
+    const startCol = col - (col % 3);
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        if (grid[i + startRow][j + startCol] === num) return false;
+      }
+    }
+
+    return true;
+  }
+
+  // Solve a Sudoku puzzle and count the number of solutions
+  public countSolutions(grid: number[][], maxSolutions: number = 2): number {
+    const workingGrid = this.copyAnyGrid(grid);
+    return this.countSolutionsRecursive(workingGrid, 0, 0, maxSolutions);
+  }
+
+  private countSolutionsRecursive(
+    grid: number[][],
+    row: number,
+    col: number,
+    maxSolutions: number
+  ): number {
+    // Move to next row if we've reached the end of current row
+    if (col === 9) {
+      return this.countSolutionsRecursive(grid, row + 1, 0, maxSolutions);
+    }
+
+    // If we've filled all rows, we found a solution
+    if (row === 9) {
+      return 1;
+    }
+
+    // If cell is already filled, move to next cell
+    if (grid[row][col] !== 0) {
+      return this.countSolutionsRecursive(grid, row, col + 1, maxSolutions);
+    }
+
+    let solutionCount = 0;
+
+    // Try numbers 1-9
+    for (let num = 1; num <= 9; num++) {
+      if (this.isValidForGrid(grid, row, col, num)) {
+        grid[row][col] = num;
+
+        solutionCount += this.countSolutionsRecursive(
+          grid,
+          row,
+          col + 1,
+          maxSolutions
+        );
+
+        // Early exit if we've found more than maxSolutions
+        if (solutionCount >= maxSolutions) {
+          grid[row][col] = 0;
+          return solutionCount;
+        }
+
+        grid[row][col] = 0;
+      }
+    }
+
+    return solutionCount;
+  }
+
+  // Check if a puzzle has a unique solution
+  private hasUniqueSolution(grid: number[][]): boolean {
+    return this.countSolutions(grid, 2) === 1;
+  }
+
+  // Remove cells based on difficulty level with uniqueness check
   private removeCells(difficulty: Difficulty): number[][] {
     const puzzleGrid = this.copyGrid();
 
@@ -105,33 +198,76 @@ class SudokuGenerator {
       [Difficulty.Expert]: 60, // ~26% filled
     };
 
-    const toRemove = cellsToRemove[difficulty];
-    let removed = 0;
+    const targetToRemove = cellsToRemove[difficulty];
+    const minAcceptable = Math.floor(targetToRemove * 0.9); // Accept 90% of target as minimum
 
-    // Create list of all positions
-    const positions: [number, number][] = [];
-    for (let row = 0; row < 9; row++) {
-      for (let col = 0; col < 9; col++) {
-        positions.push([row, col]);
+    let bestGrid = this.copyAnyGrid(puzzleGrid);
+    let bestRemoved = 0;
+
+    // Try multiple attempts to get closer to target
+    const maxRetries = 3;
+
+    for (let retry = 0; retry < maxRetries; retry++) {
+      const attemptGrid = this.copyGrid();
+      let removed = 0;
+      let attempts = 0;
+      const maxAttempts = 1000; // Prevent infinite loops
+
+      // Create list of all positions
+      const positions: [number, number][] = [];
+      for (let row = 0; row < 9; row++) {
+        for (let col = 0; col < 9; col++) {
+          positions.push([row, col]);
+        }
+      }
+
+      // Shuffle positions for random removal
+      const shuffledPositions = this.shuffleArray(positions);
+
+      // Remove cells one by one, checking uniqueness after each removal
+      for (const [row, col] of shuffledPositions) {
+        if (removed >= targetToRemove || attempts >= maxAttempts) break;
+
+        attempts++;
+
+        // Store the original value
+        const originalValue = attemptGrid[row][col];
+
+        // Skip if cell is already empty
+        if (originalValue === 0) continue;
+
+        // Temporarily remove the cell
+        attemptGrid[row][col] = 0;
+
+        // Check if the puzzle still has a unique solution
+        if (this.hasUniqueSolution(attemptGrid)) {
+          // Keep the cell removed
+          removed++;
+        } else {
+          // Restore the cell if removing it creates multiple solutions
+          attemptGrid[row][col] = originalValue;
+        }
+      }
+
+      // Keep the best attempt so far
+      if (removed > bestRemoved) {
+        bestGrid = this.copyAnyGrid(attemptGrid);
+        bestRemoved = removed;
+      }
+
+      // If we hit our target, we can stop early
+      if (removed >= targetToRemove) {
+        break;
       }
     }
 
-    // Shuffle positions for random removal
-    const shuffledPositions = this.shuffleArray(positions);
+    // Log the result
+    const status = bestRemoved >= minAcceptable ? "✓" : "⚠";
+    console.log(
+      `${status} Generated ${difficulty} puzzle with ${bestRemoved} cells removed (target: ${targetToRemove}, min: ${minAcceptable})`
+    );
 
-    // Remove cells randomly
-    for (const [row, col] of shuffledPositions) {
-      if (removed >= toRemove) break;
-
-      const originalValue = puzzleGrid[row][col];
-      puzzleGrid[row][col] = 0;
-
-      // For now, we'll do simple removal without checking uniqueness
-      // In a production app, you'd want to ensure the puzzle has a unique solution
-      removed++;
-    }
-
-    return puzzleGrid;
+    return bestGrid;
   }
 
   // Generate a complete Sudoku puzzle
@@ -180,6 +316,30 @@ function getRandomDifficulty(): Difficulty {
 
 // Export a random board that can be imported directly
 export const randomBoard = generateSudokuPuzzle(getRandomDifficulty());
+
+// Helper function to verify a puzzle has a unique solution
+export function verifyPuzzleUniqueness(boardString: string): {
+  isUnique: boolean;
+  solutionCount: number;
+} {
+  const generator = new SudokuGenerator();
+
+  // Convert string to grid
+  const grid: number[][] = Array(9)
+    .fill(null)
+    .map(() => Array(9).fill(0));
+  for (let i = 0; i < 81; i++) {
+    const row = Math.floor(i / 9);
+    const col = i % 9;
+    grid[row][col] = parseInt(boardString[i]) || 0;
+  }
+
+  const solutionCount = generator.countSolutions(grid, 3); // Check up to 3 solutions
+  return {
+    isUnique: solutionCount === 1,
+    solutionCount,
+  };
+}
 
 // Helper function to format board for display
 export function formatBoardForDisplay(boardString: string): string {
@@ -230,6 +390,16 @@ if (typeof window === "undefined") {
       `Empty cells: ${emptyCells}/81 (${Math.round(
         (emptyCells / 81) * 100
       )}% empty)`
+    );
+
+    // Verify uniqueness
+    const verification = verifyPuzzleUniqueness(puzzle.board);
+    console.log(
+      `Uniqueness check: ${
+        verification.isUnique ? "✓ UNIQUE" : "✗ NOT UNIQUE"
+      } (${verification.solutionCount} solution${
+        verification.solutionCount !== 1 ? "s" : ""
+      })`
     );
   });
 }

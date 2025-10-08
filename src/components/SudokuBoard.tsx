@@ -1,15 +1,62 @@
 "use client";
-import { randomBoard } from "@/lib/board-generator";
-import { useState } from "react";
+import { fetchPuzzle } from "@/lib/api";
+import { useState, useEffect } from "react";
+import { SkeletonBoard } from "./SkeletonBoard";
+
+interface PuzzleData {
+  board: string;
+  difficulty: string;
+}
 
 export default function SudokuBoard() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [puzzle, setPuzzle] = useState<PuzzleData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const cells = randomBoard.board.split("");
+  useEffect(() => {
+    const loadPuzzle = async () => {
+      try {
+        setLoading(true);
+        const puzzleData = await fetchPuzzle();
+        setPuzzle(puzzleData);
+        setError(null);
+      } catch (err) {
+        setError("Failed to load today's puzzle");
+        console.error("Error fetching puzzle:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadPuzzle();
+  }, []);
+
+  if (loading) {
+    return <SkeletonBoard />;
+  }
+
+  if (error || !puzzle) {
+    return (
+      <div className="flex flex-col items-center gap-4">
+        <div className="text-lg text-red-600">
+          {error || "No puzzle available"}
+        </div>
+      </div>
+    );
+  }
+
+  const cells = puzzle.board.split("");
   const selectedValue = selectedIndex !== null ? cells[selectedIndex] : null;
 
   return (
     <div className="flex flex-col items-center gap-4">
+      <div className="text-center">
+        <div className="text-sm text-gray-600 mb-2">
+          Difficulty:{" "}
+          <span className="font-semibold capitalize">{puzzle.difficulty}</span>
+        </div>
+      </div>
       <div className="select-none" style={{ width: "min(90vw, 540px)" }}>
         <div
           className="grid bg-white"

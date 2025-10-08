@@ -22,7 +22,7 @@ enum Difficulty {
 
 model Puzzle {
   id        String   @id @default(uuid())
-  date      DateTime @default(now()) @db.Date
+  date      String   @unique
   board     String   @db.Char(81)
   solution  String   @db.Char(81)
   difficulty Difficulty
