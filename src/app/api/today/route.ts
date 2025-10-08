@@ -14,6 +14,7 @@ export async function GET() {
   });
   if (puzzle) {
     return Response.json({
+      id: puzzle.id,
       board: puzzle.board,
       difficulty: puzzle.difficulty,
     });
@@ -27,7 +28,32 @@ export async function GET() {
     },
   });
   return Response.json({
+    id: newPuzzle.id,
     board: newPuzzle.board,
     difficulty: newPuzzle.difficulty,
   });
+}
+
+export async function POST(request: Request) {
+  const { solution } = await request.json();
+  const puzzle = await prisma.puzzle.findFirst({
+    where: {
+      solution,
+    },
+  });
+  if (puzzle) {
+    return Response.json(
+      {
+        id: puzzle.id,
+        isCorrect: solution === puzzle.solution,
+      },
+      { status: 200 }
+    );
+  }
+  return Response.json(
+    {
+      error: "Wrong solution",
+    },
+    { status: 400 }
+  );
 }
