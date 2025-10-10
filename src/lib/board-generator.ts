@@ -1,15 +1,17 @@
-export enum Difficulty {
-  Easy = "Easy",
-  Medium = "Medium",
-  Hard = "Hard",
-  Expert = "Expert",
-}
+import { solveHuman } from "./human-solver";
+import {
+  techniqueCapFor,
+  toRating,
+  isWithinBand,
+  ratePuzzle,
+  stringToGrid,
+} from "./rating";
+import { getPolicyFor, meetsDistributionGuards } from "./policy";
+import { Difficulty, type SudokuPuzzle } from "./types";
 
-export interface SudokuPuzzle {
-  board: string; // 81 characters, '0' for empty cells
-  solution: string; // 81 characters, complete solution
-  difficulty: Difficulty;
-}
+// Re-export types and utility functions
+export { Difficulty, type SudokuPuzzle };
+export { ratePuzzle, stringToGrid, solveHuman, techniqueCapFor };
 
 class SudokuGenerator {
   private grid: number[][];
@@ -186,32 +188,28 @@ class SudokuGenerator {
     return this.countSolutions(grid, 2) === 1;
   }
 
-  // Remove cells based on difficulty level with uniqueness check
+  // Remove cells based on difficulty level with uniqueness and human-solvability checks
   private removeCells(difficulty: Difficulty): number[][] {
     const puzzleGrid = this.copyGrid();
-
-    // Define how many cells to remove for each difficulty
-    const cellsToRemove = {
-      [Difficulty.Easy]: 40, // ~45% filled
-      [Difficulty.Medium]: 50, // ~38% filled
-      [Difficulty.Hard]: 55, // ~32% filled
-      [Difficulty.Expert]: 60, // ~26% filled
-    };
-
-    const targetToRemove = cellsToRemove[difficulty];
-    const minAcceptable = Math.floor(targetToRemove * 0.9); // Accept 90% of target as minimum
+    const policy = getPolicyFor(difficulty);
+    const techniqueCap = techniqueCapFor(difficulty);
 
     let bestGrid = this.copyAnyGrid(puzzleGrid);
     let bestRemoved = 0;
+    let bestRating = null;
 
-    // Try multiple attempts to get closer to target
-    const maxRetries = 3;
+    // Try multiple attempts to find a good puzzle
+    // More retries for harder difficulties
+    const maxRetries =
+      difficulty === Difficulty.Expert || difficulty === Difficulty.Hard
+        ? 8
+        : 5;
 
     for (let retry = 0; retry < maxRetries; retry++) {
       const attemptGrid = this.copyGrid();
       let removed = 0;
       let attempts = 0;
-      const maxAttempts = 1000; // Prevent infinite loops
+      const maxAttempts = 150; // More attempts needed for technique-based generation
 
       // Create list of all positions
       const positions: [number, number][] = [];
@@ -224,9 +222,9 @@ class SudokuGenerator {
       // Shuffle positions for random removal
       const shuffledPositions = this.shuffleArray(positions);
 
-      // Remove cells one by one, checking uniqueness after each removal
+      // Remove cells one by one, checking all constraints
       for (const [row, col] of shuffledPositions) {
-        if (removed >= targetToRemove || attempts >= maxAttempts) break;
+        if (attempts >= maxAttempts) break;
 
         attempts++;
 
@@ -239,32 +237,86 @@ class SudokuGenerator {
         // Temporarily remove the cell
         attemptGrid[row][col] = 0;
 
-        // Check if the puzzle still has a unique solution
-        if (this.hasUniqueSolution(attemptGrid)) {
-          // Keep the cell removed
-          removed++;
-        } else {
-          // Restore the cell if removing it creates multiple solutions
+        // Check 1: Uniqueness (existing fast backtracking solver)
+        if (!this.hasUniqueSolution(attemptGrid)) {
           attemptGrid[row][col] = originalValue;
+          continue;
         }
+
+        // Check 2: Distribution guards (structural requirements)
+        // Only enforce after we've removed a few cells
+        if (removed > 10 && !meetsDistributionGuards(attemptGrid, policy)) {
+          attemptGrid[row][col] = originalValue;
+          continue;
+        }
+
+        // Check 3: Human solvability with technique cap
+        const report = solveHuman(attemptGrid, techniqueCap);
+
+        if (!report.solved) {
+          // Cannot solve with allowed techniques
+          attemptGrid[row][col] = originalValue;
+          continue;
+        }
+
+        // Check 4: Initial singles requirement (relaxed)
+        // Only check after we've removed enough cells to matter
+        if (removed > 20 && report.initialSingles < policy.minInitialSingles) {
+          attemptGrid[row][col] = originalValue;
+          continue;
+        }
+
+        // Check 5: Difficulty rating (relaxed - allow easier puzzles)
+        const rating = toRating(report);
+        if (!isWithinBand(rating, difficulty)) {
+          // Puzzle is too hard for this difficulty
+          attemptGrid[row][col] = originalValue;
+          continue;
+        }
+
+        // All checks passed - keep the cell removed
+        removed++;
       }
 
-      // Keep the best attempt so far
-      if (removed > bestRemoved) {
+      // Final re-rating to confirm difficulty
+      const finalReport = solveHuman(attemptGrid);
+      const finalRating = toRating(finalReport);
+
+      // Keep the best attempt so far (prefer exact band matches, then more empty cells)
+      const isExactBand = finalRating.band === difficulty;
+      const prevExactBand = bestRating?.band === difficulty;
+
+      const isBetterThanBest =
+        // Prefer exact band matches over non-exact
+        (isExactBand && !prevExactBand) ||
+        // Among exact bands or non-exact bands, prefer more removed cells
+        (isExactBand === prevExactBand && removed > bestRemoved);
+
+      if (isBetterThanBest || bestRemoved === 0) {
         bestGrid = this.copyAnyGrid(attemptGrid);
         bestRemoved = removed;
+        bestRating = finalRating;
       }
 
-      // If we hit our target, we can stop early
-      if (removed >= targetToRemove) {
+      // If we got an exact band match with good removal count, we can stop
+      if (
+        isExactBand &&
+        removed >= 20 &&
+        meetsDistributionGuards(attemptGrid, policy)
+      ) {
         break;
       }
     }
 
-    // Log the result
-    const status = bestRemoved >= minAcceptable ? "✓" : "⚠";
+    // Log the result with technique-based stats
+    const emptyCells = bestRemoved;
+    const givens = 81 - emptyCells;
+    const filledPercent = Math.round((givens / 81) * 100);
+
     console.log(
-      `${status} Generated ${difficulty} puzzle with ${bestRemoved} cells removed (target: ${targetToRemove}, min: ${minAcceptable})`
+      `✓ Generated ${difficulty} puzzle: ${givens} givens (${filledPercent}% filled), ` +
+        `hardest technique: ${bestRating?.hardest || "None"}, ` +
+        `rated as: ${bestRating?.band || "Unknown"}`
     );
 
     return bestGrid;
@@ -358,7 +410,7 @@ export function formatBoardForDisplay(boardString: string): string {
 // Test the generator and log results
 if (typeof window === "undefined") {
   // Only run in Node.js environment
-  console.log("Generating Sudoku Puzzles...\n");
+  console.log("Generating Sudoku Puzzles with Human-Style Rating...\n");
 
   // Generate puzzles for each difficulty
   const difficulties = [
@@ -370,7 +422,7 @@ if (typeof window === "undefined") {
 
   difficulties.forEach((difficulty) => {
     console.log(`\n${difficulty.toUpperCase()} PUZZLE:`);
-    console.log("=".repeat(50));
+    console.log("=".repeat(60));
 
     const puzzle = generateSudokuPuzzle(difficulty);
 
@@ -382,24 +434,39 @@ if (typeof window === "undefined") {
 
     console.log(`\nRaw board string (81 chars): ${puzzle.board}`);
     console.log(`Raw solution string (81 chars): ${puzzle.solution}`);
-    console.log(`Difficulty: ${puzzle.difficulty}`);
+    console.log(`Target difficulty: ${puzzle.difficulty}`);
 
-    // Count empty cells
+    // Count empty cells and givens
     const emptyCells = puzzle.board.split("0").length - 1;
+    const givens = 81 - emptyCells;
     console.log(
-      `Empty cells: ${emptyCells}/81 (${Math.round(
-        (emptyCells / 81) * 100
-      )}% empty)`
+      `Givens: ${givens}/81 (${Math.round((givens / 81) * 100)}% filled)`
     );
 
     // Verify uniqueness
     const verification = verifyPuzzleUniqueness(puzzle.board);
     console.log(
-      `Uniqueness check: ${
-        verification.isUnique ? "✓ UNIQUE" : "✗ NOT UNIQUE"
-      } (${verification.solutionCount} solution${
-        verification.solutionCount !== 1 ? "s" : ""
-      })`
+      `Uniqueness: ${verification.isUnique ? "✓ UNIQUE" : "✗ NOT UNIQUE"} (${
+        verification.solutionCount
+      } solution${verification.solutionCount !== 1 ? "s" : ""})`
     );
+
+    // Rate the puzzle using human techniques
+    const grid = stringToGrid(puzzle.board);
+    const rating = ratePuzzle(grid);
+    const report = solveHuman(grid);
+
+    console.log(`\nHuman-Style Rating:`);
+    console.log(`  Rated difficulty: ${rating.band}`);
+    console.log(`  Hardest technique: ${rating.hardest || "None"}`);
+    console.log(`  Difficulty score: ${rating.score}`);
+    console.log(`  Initial singles: ${report.initialSingles}`);
+    console.log(`  Total steps: ${report.steps}`);
+    console.log(`  Technique counts:`);
+    for (const [technique, count] of Object.entries(report.counts)) {
+      if ((count as number) > 0) {
+        console.log(`    ${technique}: ${count}`);
+      }
+    }
   });
 }
